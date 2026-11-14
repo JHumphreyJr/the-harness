@@ -2,14 +2,17 @@ import { Annotation, END, START, StateGraph, interrupt, type BaseCheckpointSaver
 import { join as joinPath } from 'node:path';
 import { reviewIndependence, reviewRunners } from './config.js';
 import { assign, nextWave } from './dispatch.js';
+import { analyseSbom, generateSbom, renderNotices, renderSbomReport, SBOM_FILE, type SbomReport } from './sbom.js';
+import { expertCatalogue } from './prompts.js';
 import { Git } from './git.js';
 import type { Harness } from './harness.js';
-import { DesignSchema, ElicitSchema, PlanSchema, QaSchema, ReviewSchema, ScopeSchema, SummarySchema, UxSchema, parseFileBlocks, type Guideline } from './schemas.js';
+import { ComplianceSchema, DesignSchema, ElicitSchema, ExpertSchema, PlanSchema, QaSchema, ReviewSchema, ScopeSchema, SummarySchema, UxSchema, parseFileBlocks, type Guideline } from './schemas.js';
 import { gateIsHuman, lensesFor, profileFor } from './tiers.js';
 import { TOPOLOGY } from './topology.js';
 import {
   REVIEW_LENSES,
   type Clarification,
+  type Consult,
   type Gate,
   type GateDecision,
   type PlanTask,
@@ -42,6 +45,8 @@ export const RunState = Annotation.Root({
   artifacts: Annotation<Record<string, string>>({ reducer: merge, default: () => ({}) }),
   decisions: Annotation<string[]>({ reducer: (a, b) => [...a, ...b], default: () => [] }),
   tasks: Annotation<PlanTask[]>(),
+  /** Unused. Kept so checkpoints written before parallel build tracks existed still load. */
+  taskIndex: withDefault<number>(() => 0),
   /** Ids of tasks whose work is merged and verified. */
   done: withDefault<string[]>(() => []),
   /** Ids of the tasks merged in the current wave, awaiting verification. */
@@ -53,6 +58,14 @@ export const RunState = Annotation.Root({
   stage: withDefault<'qa' | 'review'>(() => 'qa'),
   qaResult: withDefault<QaResult | null>(() => null),
   qaRound: withDefault<number>(() => 0),
+  /** Ids of the regulatory regimes found applicable. Their control packs are added to agent prompts. */
+  regimes: withDefault<string[]>(() => []),
+  /** Experts the architect asked to consult on the draft design. */
+  consults: withDefault<Consult[]>(() => []),
+  consultRound: withDefault<number>(() => 0),
+  sbomRound: withDefault<number>(() => 0),
+  /** Shipped components whose licence the policy forbids, awaiting rework. */
+  licenseViolations: withDefault<string[]>(() => []),
   checks: Annotation<VerifyResult | null>(),
   verifyAttempts: Annotation<number>(),
   reviewRound: Annotation<number>(),
@@ -112,6 +125,7 @@ export function buildGraph(h: Harness, checkpointer: BaseCheckpointSaver) {
     input,
     access,
     tier: state.tier,
+    regimes: state.regimes ?? [],
     surfaces: state.surfaces ?? { graphical: false, platforms: ['web' as const] },
   });
 
@@ -307,6 +321,65 @@ export function buildGraph(h: Harness, checkpointer: BaseCheckpointSaver) {
     artifacts: [state.artifacts['Product requirements'] ?? ''],
   }));
 
+  // -------------------------------------------------------------- compliance
+
+  const compliance = work('compliance', async (state) => {
+    const { body, data } = await h.invoke(
+      ask(
+        state,
+        'compliance',
+        'compliance',
+        join(
+          context(state, ['Product requirements']),
+          revision(state, 'compliance'),
+          'Assess this product. Write a short assessment as markdown: what data it handles and what follows from that. Then return the data categories and, for every regime in the compliance standard, whether it applies, why, the obligations that follow, the right tool for each, and what change to the product would alter the answer. List the facts you need from the approver for anything uncertain.',
+        ),
+      ),
+      ComplianceSchema,
+    );
+    const production = state.tier !== 'prototype';
+    // An undecided regime is treated as applicable at production tiers: build for it until a person rules it out.
+    const applicable = data.regimes.filter((r) => r.applies === 'yes' || (production && r.applies === 'uncertain'));
+    const cell = (text: string) => text.replace(/\n/g, ' ').replace(/\|/g, '/');
+    const document = [
+      body,
+      '',
+      '## Data inventory',
+      '',
+      ...(data.dataCategories.length ? ['| Category | Examples | Stored | Notes |', '|---|---|---|---|', ...data.dataCategories.map((d) => `| ${cell(d.category)} | ${cell(d.examples)} | ${d.stored ? 'yes' : 'no'} | ${cell(d.notes)} |`)] : ['No regulated data categories were identified.']),
+      '',
+      '## Applicability',
+      '',
+      '| Regime | Applies | Why | Reassess if |',
+      '|---|---|---|---|',
+      ...data.regimes.map((r) => `| ${cell(r.name)} | ${r.applies} | ${cell(r.reason)} | ${cell(r.reassessIf)} |`),
+      '',
+      ...applicable.flatMap((r) => [`## Obligations: ${r.name}`, '', ...r.obligations.map((o) => `- ${o}`), '', ...(r.rightTools.length ? ['**Right tools**', '', ...r.rightTools.map((t) => `- ${t}`), ''] : [])]),
+      ...(data.questions.length ? ['## Questions for the approver', '', ...data.questions.map((q) => `- ${q}`), ''] : []),
+      '## Every project',
+      '',
+      `A software bill of materials (\`${SBOM_FILE}\`) and an open source licence review are produced for every build, at every tier. See \`docs/compliance/SBOM-REPORT.md\`.`,
+      '',
+      '_This assessment is an engineering working position produced by an AI agent. It is not legal advice. A qualified person must confirm it before production use._',
+    ].join('\n');
+    const path = h.writeArtifact('compliance', 'docs/compliance/COMPLIANCE-ASSESSMENT.md', document);
+    const decision = h.recordDecision('compliance', 'compliance', {
+      title: applicable.length ? `Compliance scope: ${applicable.map((r) => r.name).join(', ')}` : 'Compliance scope: no regulatory regime applies',
+      context: data.summary,
+      options: [],
+      decision: data.regimes.map((r) => `${r.name}: ${r.applies}. ${r.reason}`).join(' '),
+      consequences: applicable.length ? `The control packs for ${applicable.map((r) => r.id).join(', ')} are added to design, build, QA and review. Reassess when scope changes.` : `Only the universal SBOM and licence checks apply. Reassess if: ${data.regimes.map((r) => r.reassessIf).filter(Boolean).join('; ') || 'the data handled changes'}.`,
+    });
+    h.commit('compliance', 'docs(compliance): applicability assessment');
+    return { regimes: applicable.map((r) => r.id), artifacts: { 'Compliance assessment': path }, decisions: [decision] };
+  });
+
+  const gateCompliance = gate('compliance', (state) => ({
+    title: 'Confirm the compliance assessment',
+    summary: `${state.regimes.length ? `Treated as applicable: ${state.regimes.join(', ')}.` : 'No regulatory regime was found to apply.'}\nThis is an AI agent's working position, not legal advice. Approve only if you, or the person responsible for compliance, agree with it.`,
+    artifacts: [state.artifacts['Compliance assessment'] ?? ''],
+  }));
+
   // ------------------------------------------------------------------ design
 
   const ux = work('ux', async (state) => {
@@ -341,9 +414,16 @@ export function buildGraph(h: Harness, checkpointer: BaseCheckpointSaver) {
         'architect',
         'architecture',
         join(
-          context(state, ['Product requirements', 'UX specification']),
+          context(state, ['Product requirements', 'Compliance assessment', 'UX specification']),
           section('Agreed stack', state.stack.join(', ')),
           revision(state, 'architecture'),
+          state.consultRound > 0
+            ? join(
+                section('Your draft', h.readArtifact(state.artifacts.Architecture)),
+                section('What the domain experts said about it', h.readArtifact(state.artifacts['Expert review'])),
+                'Revise the design. Address every expert finding: adopt it, or keep your decision and say why in the document. Do not ask for further consultation.',
+              )
+            : `You may have domain experts challenge specific decisions before the design is final: at most ${profileFor(state.tier).maxExperts} at this tier, and only where a decision is risky, unfamiliar or expensive to reverse. Return them as consults, each with the topic and the exact questions. Experts on file: ${expertCatalogue().join(', ')}. Any other domain can be named in plain words. Return none if the design does not need it.`,
           'Write the architecture document as markdown, sized to the scale tier. Return every significant choice as a decision record with the options you rejected. Any departure from the stack policy or the tier standard needs its own decision record. Return the official platform and language guidelines the design follows, with the sections applied. Return a performance budget with measurable targets, and every third-party dependency with what the platform could not do, its runtime cost, and the evidence that it is mature and security tested. Prefer none.',
         ),
       ),
@@ -370,15 +450,70 @@ export function buildGraph(h: Harness, checkpointer: BaseCheckpointSaver) {
     ].join('\n');
     h.emit({ type: 'agent.message', node: 'architecture', role: 'architect', data: { text: `Third-party dependencies: ${data.dependencies.length ? data.dependencies.map((d) => d.name).join(', ') : 'none'}`, dependencies: data.dependencies, performanceBudget: data.performanceBudget } });
     const path = h.writeArtifact('architecture', 'docs/architecture/ARCHITECTURE.md', body + technology + guidelineSection('architecture', 'architect', data.guidelines));
+    // First pass with consultations requested: this is a draft. Decisions are recorded only once the experts have been heard.
+    const consults = state.consultRound === 0 ? data.consults.slice(0, profileFor(state.tier).maxExperts) : [];
+    if (consults.length > 0) {
+      h.commit('architecture', 'docs(architecture): draft for expert review');
+      return { artifacts: { Architecture: path }, consults };
+    }
     const decisions = data.decisions.map((record) => h.recordDecision('architecture', 'architect', record));
     h.commit('architecture', 'docs(architecture): design and decision records');
-    return { artifacts: { Architecture: path }, decisions };
+    return { artifacts: { Architecture: path }, decisions, consults: [] };
+  });
+
+  const expertPanel = work('expert_panel', async (state) => {
+    // Every expert reads the same draft at the same time, each in a fresh context with its own brief.
+    const settled = await Promise.allSettled(
+      state.consults.map((consult) =>
+        h.invoke(
+          {
+            ...ask(
+              state,
+              'expert',
+              'expert_panel',
+              join(
+                context(state, ['Product requirements', 'Architecture']),
+                section(`You are consulted on: ${consult.topic}`, consult.questions.map((q) => `- ${q}`).join('\n') || 'Review the decisions in your domain.'),
+                'Give your verdict on this part of the design for this product at this tier. Check current official documentation for the versions named.',
+              ),
+            ),
+            expert: consult.expert,
+            tag: consult.expert.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+          },
+          ExpertSchema,
+        ),
+      ),
+    );
+    const cell = (text: string) => text.replace(/\n/g, ' ').replace(/\|/g, '/');
+    const sections = state.consults.flatMap((consult, index) => {
+      const outcome = settled[index] as PromiseSettledResult<{ data: { verdict: string; summary: string; findings: { severity: string; summary: string; recommendation: string }[]; sources: string[] }; model: string }>;
+      if (outcome.status === 'rejected') {
+        h.emit({ type: 'agent.message', node: 'expert_panel', role: 'expert', data: { text: `Expert ${consult.expert} could not be consulted: ${String(outcome.reason?.message ?? outcome.reason).slice(0, 300)}` } });
+        return [`## ${consult.expert}: not consulted`, '', `The consultation failed: ${String(outcome.reason?.message ?? outcome.reason).slice(0, 300)}`, ''];
+      }
+      const { data, model } = outcome.value;
+      h.emit({ type: 'agent.message', node: 'expert_panel', role: 'expert', agent: `expert@${consult.expert}`, data: { text: `${consult.expert}: ${data.verdict}, ${data.findings.length} finding(s) on ${consult.topic}`, expert: consult.expert, verdict: data.verdict, findings: data.findings.length } });
+      return [
+        `## ${consult.expert}: ${data.verdict}`,
+        '',
+        `Topic: ${consult.topic}. Model: \`${model}\`.`,
+        '',
+        data.summary,
+        '',
+        ...(data.findings.length ? ['| Severity | Finding | Recommendation |', '|---|---|---|', ...data.findings.map((f) => `| ${f.severity} | ${cell(f.summary)} | ${cell(f.recommendation)} |`)] : ['No findings.']),
+        '',
+        ...(data.sources.length ? [`Sources checked: ${data.sources.map(cell).join('; ')}`, ''] : []),
+      ];
+    });
+    const path = h.writeArtifact('expert_panel', 'docs/architecture/EXPERT-REVIEW.md', ['# Expert review of the draft architecture', '', `Run \`${h.runId}\`. The architect asked ${state.consults.length} domain expert(s) to challenge specific decisions. The architect's response to each finding is in the architecture document.`, '', ...sections].join('\n'));
+    h.commit('expert_panel', 'docs(architecture): expert review of the draft');
+    return { consultRound: 1, artifacts: { 'Expert review': path } };
   });
 
   const gateArchitecture = gate('architecture', (state) => ({
     title: 'Approve the architecture',
-    summary: `Decision records: ${state.decisions.length}`,
-    artifacts: [state.artifacts.Architecture ?? '', ...state.decisions],
+    summary: `Decision records: ${state.decisions.length}.${state.artifacts['Expert review'] ? ' Domain experts reviewed the draft; see the expert review.' : ''}`,
+    artifacts: [state.artifacts.Architecture ?? '', state.artifacts['Expert review'] ?? '', ...state.decisions],
   }));
 
   const threatModel = work('threat_model', async (state) => {
@@ -388,7 +523,7 @@ export function buildGraph(h: Harness, checkpointer: BaseCheckpointSaver) {
         'security',
         'threat_model',
         join(
-          context(state, ['Product requirements', 'Architecture']),
+          context(state, ['Product requirements', 'Compliance assessment', 'Architecture']),
           revision(state, 'threat-model'),
           'Write the threat model as markdown: assets, trust boundaries, STRIDE threats, and the control for each. Map controls to the security standard and call out anything the architecture is missing.',
         ),
@@ -414,7 +549,7 @@ export function buildGraph(h: Harness, checkpointer: BaseCheckpointSaver) {
         'planner',
         'plan',
         join(
-          context(state, ['Product requirements', 'UX specification', 'Architecture', 'Threat model']),
+          context(state, ['Product requirements', 'Compliance assessment', 'UX specification', 'Architecture', 'Threat model']),
           state.feedback.plan ? section('Re-planning', `${state.feedback.plan}\n\nInspect the repository first. Work that already exists and passes its checks is done: do not plan it again. Plan only what remains.`) : '',
           'Break the work into small, independently verifiable tasks in build order. Every task traces to requirement ids and has testable acceptance criteria. Every requirement must be covered by at least one task. Give each task a track, its real dependencies, a size and a risk, so independent tiers and platforms can be built in parallel.',
         ),
@@ -592,7 +727,7 @@ export function buildGraph(h: Harness, checkpointer: BaseCheckpointSaver) {
   const afterVerify = (state: State) => {
     const redo = state.phase === 'build' ? 'implement' : 'fix';
     if (!state.checks?.ok) return state.verifyAttempts >= profileFor(state.tier).maxVerifyAttempts ? 'gate_release' : redo;
-    if (state.phase === 'fix') return state.stage === 'review' ? 'publish' : 'qa';
+    if (state.phase === 'fix') return state.stage === 'review' ? 'sbom' : 'qa';
     return state.done.length < state.tasks.length ? 'implement' : 'document';
   };
 
@@ -633,7 +768,7 @@ export function buildGraph(h: Harness, checkpointer: BaseCheckpointSaver) {
           'qa',
           'qa',
           join(
-            context(state, ['Product requirements', 'UX specification', 'Architecture', 'Plan']),
+            context(state, ['Product requirements', 'Compliance assessment', 'UX specification', 'Architecture', 'Plan']),
             section('Verification status', state.checks?.ok ? 'The project checks pass.' : 'The project checks are failing or not configured.'),
             state.qaResult ? section('Defects you reported last round', state.qaResult.defects.map((d) => `- [${d.severity}] ${d.summary}`).join('\n') || 'None.') : '',
             `Test this build against the requirements. Return one case per requirement you checked, citing its id, with the evidence. ${profile.qaRequiresFullCoverage ? 'At this tier every functional requirement needs a result.' : 'At this tier cover the critical flows and functions; mark the rest not-run with the reason.'} Do not change product code.`,
@@ -689,7 +824,7 @@ export function buildGraph(h: Harness, checkpointer: BaseCheckpointSaver) {
   const afterQa = (state: State) => {
     if (state.qaResult?.verdict === 'fail' && state.qaRound < profileFor(state.tier).maxQaRounds) return 'fix';
     // Usability testing needs people and an interface. Without an interface there is nothing to observe.
-    return state.surfaces.graphical ? 'usability_prep' : 'publish';
+    return state.surfaces.graphical ? 'usability_prep' : 'sbom';
   };
 
   const usabilityPrep = work('usability_prep', async (state) => {
@@ -724,6 +859,47 @@ export function buildGraph(h: Harness, checkpointer: BaseCheckpointSaver) {
       .join('\n'),
     artifacts: [state.artifacts['Usability test plan'] ?? '', state.branch],
   }));
+
+  // -------------------------------------------------------------------- sbom
+
+  /** Deterministic: an established tool generates the SBOM and the harness itself checks it. No model is involved. */
+  const sbom = work('sbom', (state) => {
+    const round = state.sbomRound + 1;
+    const production = state.tier !== 'prototype';
+    const { bom, error, command } = generateSbom(h.projectDir, h.config);
+    const report: SbomReport = bom
+      ? { generated: true, file: SBOM_FILE, ...analyseSbom(bom, h.config) }
+      : { generated: false, error: error ?? 'unknown error', file: SBOM_FILE, format: '', specVersion: '', components: [], checks: [], denied: [], needsReview: [], unlicensed: [] };
+
+    if (report.generated) {
+      h.emit({ type: 'artifact.written', node: 'sbom', data: { path: SBOM_FILE, components: report.components.length, format: `${report.format} ${report.specVersion}` } });
+      h.writeArtifact('sbom', 'THIRD-PARTY-NOTICES.md', renderNotices(report, state.request.split('\n')[0]?.slice(0, 80) ?? 'This product'));
+    }
+    const path = h.writeArtifact('sbom', 'docs/compliance/SBOM-REPORT.md', renderSbomReport(report, h.runId, command));
+    h.commit('sbom', 'chore(compliance): software bill of materials and licence report');
+
+    const failedChecks = report.checks.filter((c) => !c.ok);
+    const notes: string[] = [];
+    if (!report.generated) notes.push(`No SBOM was produced: ${report.error}`);
+    if (report.denied.length && round >= 2) notes.push(`${report.denied.length} shipped component(s) use a licence the policy forbids`);
+    if (production && failedChecks.length) notes.push(`SBOM misses the EU baseline on: ${failedChecks.map((c) => c.name.toLowerCase()).join('; ')}`);
+    if (production && (report.needsReview.length || report.unlicensed.length)) notes.push(`${report.needsReview.length + report.unlicensed.length} shipped component(s) need a person to review their licence`);
+    h.emit({
+      type: 'sbom.result',
+      node: 'sbom',
+      data: { generated: report.generated, format: `${report.format} ${report.specVersion}`.trim(), components: report.components.length, checksFailed: failedChecks.map((c) => c.name), denied: report.denied.length, needsReview: report.needsReview.length, unlicensed: report.unlicensed.length, ...(report.error ? { error: report.error.slice(0, 400) } : {}) },
+    });
+    const keep = state.unresolved.filter((u) => !/SBOM|licence/.test(u));
+    return {
+      sbomRound: round,
+      licenseViolations: report.denied.map((d) => `${d.component} (${d.license})`),
+      artifacts: { 'SBOM report': path },
+      unresolved: [...keep, ...notes],
+    };
+  });
+
+  /** A forbidden licence gets one round of rework (replace the dependency) before it is escalated to a person. */
+  const afterSbom = (state: State) => (state.licenseViolations.length > 0 && state.sbomRound < 2 ? 'fix' : 'publish');
 
   // ------------------------------------------------------------------ review
 
@@ -770,7 +946,7 @@ export function buildGraph(h: Harness, checkpointer: BaseCheckpointSaver) {
       const diff = full.length > limit ? `${full.slice(0, limit)}\n\n[diff truncated at ${limit} characters; inspect the workspace for the rest]` : full;
       const earlier = Object.values(state.reviews).filter((r) => r.lens === lens && r.round < state.reviewRound);
       const input = join(
-              context(state, lens === 'ux' ? ['Product requirements', 'UX specification'] : lens === 'security' ? ['Product requirements', 'Threat model'] : ['Product requirements', 'Architecture']),
+              context(state, lens === 'ux' ? ['Product requirements', 'UX specification'] : lens === 'security' ? ['Product requirements', 'Compliance assessment', 'Threat model'] : lens === 'compliance' ? ['Product requirements', 'Compliance assessment', 'SBOM report'] : ['Product requirements', 'Architecture']),
               earlier.length ? section('Your findings from earlier rounds', earlier.flatMap((r) => r.findings.map((f) => `- [${f.severity}] ${f.summary}`)).join('\n')) : '',
               section('Verification status', state.checks?.ok ? 'All configured checks pass.' : 'Checks are failing or not configured.'),
               section('Pull request diff', `\`\`\`diff\n${diff}\n\`\`\``),
@@ -803,7 +979,7 @@ export function buildGraph(h: Harness, checkpointer: BaseCheckpointSaver) {
       return { reviews: { [`${state.reviewRound}:${lens}`]: result } };
     });
 
-  const fanOut = (state: State) => lensesFor(state.tier, state.surfaces.graphical).map((lens) => `review_${lens}`);
+  const fanOut = (state: State) => lensesFor(state.tier, state.surfaces.graphical, state.regimes.length > 0).map((lens) => `review_${lens}`);
 
   const renderReviews = (state: State, reviews: ReviewResult[]) =>
     [
@@ -863,6 +1039,7 @@ export function buildGraph(h: Harness, checkpointer: BaseCheckpointSaver) {
           context(state, ['Product requirements', 'UX specification', 'Architecture']),
           section('QA failures to resolve', fromQa.join('\n')),
           section('Review findings to resolve', fromReview.join('\n')),
+          state.licenseViolations.length ? section('Dependencies whose licence is not allowed', `${state.licenseViolations.map((v) => `- ${v}`).join('\n')}\n\nReplace each with the platform's own facilities or a dependency under a permitted licence, and update the dependency table in the architecture.`) : '',
           state.feedback.usability ? section('Observed in usability testing', state.feedback.usability) : '',
           revision(state, 'release'),
           failures(state),
@@ -945,9 +1122,12 @@ export function buildGraph(h: Harness, checkpointer: BaseCheckpointSaver) {
     .addNode('gate_clarify', gateClarify)
     .addNode('requirements', requirements)
     .addNode('gate_requirements', gateRequirements)
+    .addNode('compliance', compliance)
+    .addNode('gate_compliance', gateCompliance)
     .addNode('ux', ux)
     .addNode('gate_ux', gateUx)
     .addNode('architecture', architecture)
+    .addNode('expert_panel', expertPanel)
     .addNode('gate_architecture', gateArchitecture)
     .addNode('threat_model', threatModel)
     .addNode('gate_threat-model', gateThreat)
@@ -959,11 +1139,13 @@ export function buildGraph(h: Harness, checkpointer: BaseCheckpointSaver) {
     .addNode('qa', qa)
     .addNode('usability_prep', usabilityPrep)
     .addNode('gate_usability', gateUsability)
+    .addNode('sbom', sbom)
     .addNode('publish', publish)
     .addNode('review_code', review('code'))
     .addNode('review_security', review('security'))
     .addNode('review_ux', review('ux'))
     .addNode('review_architecture', review('architecture'))
+    .addNode('review_compliance', review('compliance'))
     .addNode('review_gate', reviewGate)
     .addNode('gate_release', gateRelease)
     .addNode('complete', complete)
@@ -976,12 +1158,19 @@ export function buildGraph(h: Harness, checkpointer: BaseCheckpointSaver) {
     .addEdge('requirements', 'gate_requirements')
     .addConditionalEdges(
       'gate_requirements',
-      (state) => (state.gates.requirements?.decision === 'revise' ? 'requirements' : state.surfaces.graphical ? 'ux' : 'architecture'),
-      ['requirements', 'ux', 'architecture'],
+      (state) => (state.gates.requirements?.decision === 'revise' ? 'requirements' : 'compliance'),
+      ['requirements', 'compliance'],
+    )
+    .addEdge('compliance', 'gate_compliance')
+    .addConditionalEdges(
+      'gate_compliance',
+      (state) => (state.gates.compliance?.decision === 'revise' ? 'compliance' : state.surfaces.graphical ? 'ux' : 'architecture'),
+      ['compliance', 'ux', 'architecture'],
     )
     .addEdge('ux', 'gate_ux')
     .addConditionalEdges('gate_ux', afterGate('ux', 'architecture', 'ux'), ['architecture', 'ux'])
-    .addEdge('architecture', 'gate_architecture')
+    .addConditionalEdges('architecture', (state) => (state.consults.length > 0 && state.consultRound === 0 ? 'expert_panel' : 'gate_architecture'), ['expert_panel', 'gate_architecture'])
+    .addEdge('expert_panel', 'architecture')
     .addConditionalEdges(
       'gate_architecture',
       (state) => (state.gates.architecture?.decision === 'revise' ? 'architecture' : profileFor(state.tier).stages.threatModel ? 'threat_model' : 'plan'),
@@ -991,16 +1180,18 @@ export function buildGraph(h: Harness, checkpointer: BaseCheckpointSaver) {
     .addConditionalEdges('gate_threat-model', afterGate('threat-model', 'plan', 'threat_model'), ['plan', 'threat_model'])
     .addEdge('plan', 'implement')
     .addEdge('implement', 'verify')
-    .addConditionalEdges('verify', afterVerify, ['implement', 'fix', 'document', 'qa', 'publish', 'gate_release'])
+    .addConditionalEdges('verify', afterVerify, ['implement', 'fix', 'document', 'qa', 'sbom', 'gate_release'])
     .addEdge('document', 'qa')
-    .addConditionalEdges('qa', afterQa, ['fix', 'usability_prep', 'publish'])
+    .addConditionalEdges('qa', afterQa, ['fix', 'usability_prep', 'sbom'])
     .addEdge('usability_prep', 'gate_usability')
-    .addConditionalEdges('gate_usability', afterGate('usability', 'publish', 'fix'), ['publish', 'fix'])
+    .addConditionalEdges('gate_usability', afterGate('usability', 'sbom', 'fix'), ['sbom', 'fix'])
+    .addConditionalEdges('sbom', afterSbom, ['fix', 'publish'])
     .addConditionalEdges('publish', fanOut, REVIEW_LENSES.map((lens) => `review_${lens}` as const))
     .addEdge('review_code', 'review_gate')
     .addEdge('review_security', 'review_gate')
     .addEdge('review_ux', 'review_gate')
     .addEdge('review_architecture', 'review_gate')
+    .addEdge('review_compliance', 'review_gate')
     .addConditionalEdges('review_gate', afterReview, ['fix', 'gate_release'])
     .addEdge('fix', 'verify')
     .addConditionalEdges('gate_release', afterGate('release', 'complete', 'fix'), ['complete', 'fix'])

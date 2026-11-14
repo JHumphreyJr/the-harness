@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { PLATFORMS, TIERS } from './types.js';
+import { PLATFORMS, REGIMES, TIERS } from './types.js';
 
 /** Structured outputs agents must return. Validated on receipt; a failed parse is retried once. */
 
@@ -66,6 +66,8 @@ export const DesignSchema = z.object({
       }),
     )
     .default([]),
+  /** Domain experts the architect wants to challenge specific decisions before the design is final. */
+  consults: z.array(z.object({ expert: z.string(), topic: z.string(), questions: z.array(z.string()).default([]) })).default([]),
   /** Measurable targets the implementation is held to. Required for architecture. */
   performanceBudget: z.array(z.object({ metric: z.string(), target: z.string() })).default([]),
 });
@@ -111,6 +113,33 @@ const FindingSchema = z.object({
   line: z.number().int().optional(),
   summary: z.string(),
   recommendation: z.string(),
+});
+
+export const ExpertSchema = z.object({
+  verdict: z.enum(['endorse', 'concerns', 'reject']),
+  summary: z.string(),
+  findings: z.array(z.object({ severity: z.enum(['blocker', 'major', 'minor']), summary: z.string(), recommendation: z.string() })).default([]),
+  /** Official documentation consulted, so the advice can be checked. */
+  sources: z.array(z.string()).default([]),
+});
+
+export const ComplianceSchema = z.object({
+  summary: z.string(),
+  dataCategories: z.array(z.object({ category: z.string(), examples: z.string(), stored: z.boolean(), notes: z.string().default('') })).default([]),
+  regimes: z.array(
+    z.object({
+      id: z.enum(REGIMES),
+      name: z.string(),
+      applies: z.enum(['yes', 'no', 'uncertain']),
+      reason: z.string(),
+      obligations: z.array(z.string()).default([]),
+      rightTools: z.array(z.string()).default([]),
+      /** What change to the product would make this regime apply, or stop applying. */
+      reassessIf: z.string().default(''),
+    }),
+  ),
+  /** Facts the approver must supply before an uncertain regime can be decided. */
+  questions: z.array(z.string()).default([]),
 });
 
 export const QaSchema = z.object({

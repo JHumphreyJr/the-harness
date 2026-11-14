@@ -100,6 +100,40 @@ export class MockRunner implements AgentRunner {
           json({ summary: 'Three functional and three non-functional requirements for an outing log.' }),
         ].join('\n');
 
+      case 'compliance':
+        await this.act(ctx, [
+          ['Read', 'docs/product/PRD.md'],
+          ['Think', 'Which data is personal, and whose'],
+        ]);
+        return [
+          '# Compliance assessment',
+          '',
+          'Members sign in and their names are attached to outings, so the product processes personal data. It handles no health, payment or children\'s data.',
+          '',
+          json({
+            summary: 'Personal data of club members; GDPR applies if any member is in the EU or UK.',
+            dataCategories: [{ category: 'Identity', examples: 'name, sign-in identifier', stored: true, notes: 'From the identity provider' }],
+            regimes: [
+              { id: 'gdpr', name: 'GDPR', applies: 'yes', reason: 'Names and sign-in identifiers of members are stored.', obligations: ['Export and delete a member\'s data on request', 'Retention period for entries'], rightTools: ['The existing OIDC provider for identity'], reassessIf: 'Membership is limited to people outside the EU and UK' },
+              { id: 'hipaa', name: 'HIPAA', applies: 'no', reason: 'No health information.', obligations: [], rightTools: [], reassessIf: 'Injury or medical notes are added to entries' },
+              { id: 'pci-dss', name: 'PCI DSS', applies: 'no', reason: 'No payments.', obligations: [], rightTools: [], reassessIf: 'Membership fees are collected in the app' },
+            ],
+            questions: [],
+          }),
+        ].join('\n');
+
+      case 'expert_panel':
+        await this.act(ctx, [
+          ['Read', 'docs/architecture/ARCHITECTURE.md'],
+          ['WebFetch', 'sqlite.org/wal.html'],
+        ]);
+        return json({
+          verdict: 'concerns',
+          summary: 'Sound at this scale, provided write-ahead logging is on and writes are short.',
+          findings: [{ severity: 'major', summary: 'Default journal mode blocks readers during a write.', recommendation: 'Enable WAL and set a busy timeout.' }],
+          sources: ['https://www.sqlite.org/wal.html'],
+        });
+
       case 'ux':
         await this.act(ctx, [
           ['Read', 'docs/product/PRD.md'],
@@ -153,6 +187,7 @@ export class MockRunner implements AgentRunner {
               { metric: 'First interaction on a mid-range phone', target: 'under 2 s' },
             ],
             dependencies: [],
+            consults: [{ expert: 'relational-database', topic: 'SQLite as the only store', questions: ['Is a single-writer store safe for concurrent edits from several phones?', 'Is the nightly backup plan sound?'] }],
             guidelines: [{ name: 'TypeScript handbook: strictness', applied: 'Strict mode and schema-validated boundaries across all modules.' }],
             decisions: [
               {

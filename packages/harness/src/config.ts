@@ -67,6 +67,30 @@ export const ConfigSchema = z.object({
       ensemble: z.array(z.string()).default([]),
     })
     .default({ maxDiffChars: 120_000, ensemble: [] }),
+  compliance: z
+    .object({
+      sbom: z
+        .object({
+          /** argv for the generator. {output} is the file to write. Empty means OWASP cdxgen (installed, or through npx). */
+          command: z.array(z.string()).default([]),
+          /** Who produced the SBOM. The EU baseline wants an email or URL: "Acme Engineering <security@acme.example>". */
+          creator: z.string().default(process.env.USER ?? 'unknown'),
+          timeoutSec: z.number().int().positive().default(600),
+        })
+        .default({ command: [], creator: process.env.USER ?? 'unknown', timeoutSec: 600 }),
+      licenses: z
+        .object({
+          /** SPDX ids, or families ending in *, that may not appear in shipped components. */
+          deny: z.array(z.string()).default(['GPL-*', 'AGPL-*', 'SSPL-*', 'BUSL-*', 'CC-BY-NC-*', 'CC-BY-SA-*']),
+          /** Licences a person must look at before release. */
+          review: z.array(z.string()).default(['LGPL-*', 'MPL-*', 'EPL-*', 'CDDL-*', 'EUPL-*', 'OSL-*']),
+        })
+        .default({ deny: ['GPL-*', 'AGPL-*', 'SSPL-*', 'BUSL-*', 'CC-BY-NC-*', 'CC-BY-SA-*'], review: ['LGPL-*', 'MPL-*', 'EPL-*', 'CDDL-*', 'EUPL-*', 'OSL-*'] }),
+    })
+    .default({
+      sbom: { command: [], creator: process.env.USER ?? 'unknown', timeoutSec: 600 },
+      licenses: { deny: ['GPL-*', 'AGPL-*', 'SSPL-*', 'BUSL-*', 'CC-BY-NC-*', 'CC-BY-SA-*'], review: ['LGPL-*', 'MPL-*', 'EPL-*', 'CDDL-*', 'EUPL-*', 'OSL-*'] },
+    }),
   dispatch: z
     .object({
       /** Most developer agents working at once. Each parallel agent gets its own git worktree. */

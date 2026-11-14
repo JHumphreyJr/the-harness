@@ -74,12 +74,19 @@ function ensureIgnored(projectDir: string): void {
   if (missing.length) appendFileSync(file, `${current && !current.endsWith('\n') ? '\n' : ''}# Foundry working state (the audit log is exported to docs/runs/)\n${missing.join('\n')}\n`);
 }
 
+const MOCK_SBOM = `require('fs').writeFileSync(process.argv[1], JSON.stringify({ bomFormat: 'CycloneDX', specVersion: '1.6', metadata: { timestamp: new Date().toISOString(), authors: [{ name: 'Foundry Demo', email: 'demo@example.invalid' }], component: { name: 'outing-log', version: '0.1.0' } }, components: [{ name: 'qr-encoder', version: '1.8.0', scope: 'required', licenses: [{ license: { id: 'MIT' } }], hashes: [{ alg: 'SHA-512', content: 'ab' }] }, { name: 'test-runner', version: '3.0.0', scope: 'optional', licenses: [{ license: { id: 'Apache-2.0' } }], hashes: [{ alg: 'SHA-512', content: 'cd' }] }], dependencies: [{ ref: 'outing-log', dependsOn: ['qr-encoder'] }] }))`;
+
 function mockConfig(stepMs: number): Partial<FoundryConfig> {
   return {
     runners: { mock: { type: 'mock', stepMs } },
     roles: { default: 'mock' },
     verify: { commands: ['node -e "process.exit(0)"'], timeoutSec: 60 },
     github: { openPullRequest: false, draft: true, postReviews: false },
+    compliance: {
+      // A fixed, valid SBOM, so runs without network or the real generator still exercise the checks.
+      sbom: { command: ['node', '-e', MOCK_SBOM, '{output}'], creator: 'Foundry Demo <demo@example.invalid>', timeoutSec: 60 },
+      licenses: { deny: ['GPL-*', 'AGPL-*'], review: ['LGPL-*', 'MPL-*'] },
+    },
   };
 }
 

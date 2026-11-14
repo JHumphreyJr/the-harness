@@ -9,8 +9,10 @@ export type Platform = (typeof PLATFORMS)[number];
 export const ROLES = [
   'analyst',
   'product',
+  'compliance',
   'ux',
   'architect',
+  'expert',
   'security',
   'planner',
   'developer',
@@ -20,10 +22,10 @@ export const ROLES = [
 ] as const;
 export type Role = (typeof ROLES)[number];
 
-export const REVIEW_LENSES = ['code', 'security', 'ux', 'architecture'] as const;
+export const REVIEW_LENSES = ['code', 'security', 'ux', 'architecture', 'compliance'] as const;
 export type ReviewLens = (typeof REVIEW_LENSES)[number];
 
-export const GATES = ['scope', 'requirements', 'ux', 'architecture', 'threat-model', 'usability', 'release'] as const;
+export const GATES = ['scope', 'requirements', 'compliance', 'ux', 'architecture', 'threat-model', 'usability', 'release'] as const;
 export type Gate = (typeof GATES)[number];
 
 export interface Surfaces {
@@ -108,4 +110,15 @@ export interface DecisionRecord {
   options: { name: string; pros: string; cons: string }[];
   decision: string;
   consequences: string;
+}
+
+/** Regulatory regimes the compliance analyst can find applicable. Each has a control pack under assets/standards. */
+export const REGIMES = ['gdpr', 'ccpa', 'hipaa', 'pci-dss', 'coppa', 'eu-cra', 'eu-ai-act', 'soc2', 'other'] as const;
+export type Regime = (typeof REGIMES)[number];
+
+export interface Consult {
+  /** A catalogue id under assets/experts, or any domain in plain words. */
+  expert: string;
+  topic: string;
+  questions: string[];
 }

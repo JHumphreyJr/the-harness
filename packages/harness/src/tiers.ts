@@ -22,6 +22,8 @@ export interface TierProfile {
   reviewLenses: ReviewLens[];
   maxReviewRounds: number;
   maxQaRounds: number;
+  /** Most domain experts the architect may consult on one design. */
+  maxExperts: number;
   /** When true, every functional requirement must have a passing QA case; an untested one fails QA. */
   qaRequiresFullCoverage: boolean;
   maxVerifyAttempts: number;
@@ -47,6 +49,7 @@ export const TIER_PROFILES: Record<Tier, TierProfile> = {
     reviewLenses: ['code', 'ux'],
     maxReviewRounds: 2,
     maxQaRounds: 2,
+    maxExperts: 2,
     qaRequiresFullCoverage: false,
     maxVerifyAttempts: 3,
     standards: {
@@ -63,11 +66,12 @@ export const TIER_PROFILES: Record<Tier, TierProfile> = {
     intent:
       'Real users and real data, but low volume. Every security standard applies. Scale-out infrastructure (load balancers, sharding, queues, CQRS) is out of scope unless an ADR justifies it.',
     maxClarifyingQuestions: 7,
-    gates: ['scope', 'requirements', 'ux', 'architecture', 'threat-model', 'usability', 'release'],
+    gates: ['scope', 'requirements', 'compliance', 'ux', 'architecture', 'threat-model', 'usability', 'release'],
     stages: { threatModel: true, uxSpec: 'when-graphical' },
-    reviewLenses: ['code', 'security', 'ux'],
+    reviewLenses: ['code', 'security', 'ux', 'compliance'],
     maxReviewRounds: 3,
     maxQaRounds: 3,
+    maxExperts: 4,
     qaRequiresFullCoverage: true,
     maxVerifyAttempts: 4,
     standards: {
@@ -84,11 +88,12 @@ export const TIER_PROFILES: Record<Tier, TierProfile> = {
     intent:
       'High traffic or high consequence. Layered architecture, horizontal scale, resilience patterns, zero trust, and full observability are required and reviewed.',
     maxClarifyingQuestions: 12,
-    gates: ['scope', 'requirements', 'ux', 'architecture', 'threat-model', 'usability', 'release'],
+    gates: ['scope', 'requirements', 'compliance', 'ux', 'architecture', 'threat-model', 'usability', 'release'],
     stages: { threatModel: true, uxSpec: 'when-graphical' },
-    reviewLenses: ['code', 'security', 'ux', 'architecture'],
+    reviewLenses: ['code', 'security', 'ux', 'architecture', 'compliance'],
     maxReviewRounds: 4,
     maxQaRounds: 4,
+    maxExperts: 6,
     qaRequiresFullCoverage: true,
     maxVerifyAttempts: 4,
     standards: {
@@ -105,8 +110,9 @@ export function profileFor(tier: Tier): TierProfile {
   return TIER_PROFILES[tier];
 }
 
-export function lensesFor(tier: Tier, graphical: boolean): ReviewLens[] {
-  return TIER_PROFILES[tier].reviewLenses.filter((lens) => lens !== 'ux' || graphical);
+/** The UX lens needs an interface to review; the compliance lens needs at least one applicable regime. */
+export function lensesFor(tier: Tier, graphical: boolean, regulated = false): ReviewLens[] {
+  return TIER_PROFILES[tier].reviewLenses.filter((lens) => (lens !== 'ux' || graphical) && (lens !== 'compliance' || regulated));
 }
 
 export function gateIsHuman(tier: Tier, gate: Gate): boolean {

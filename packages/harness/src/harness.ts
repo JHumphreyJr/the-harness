@@ -34,6 +34,10 @@ export interface InvokeRequest {
   tag?: string;
   /** Work in this directory instead of the project root (a parallel agent's worktree). */
   cwd?: string;
+  /** Applicable regulatory regimes; adds their control packs to the prompt. */
+  regimes?: string[];
+  /** For the expert role: which expert. */
+  expert?: string;
   /** Set by the scope node, before a tier and surface exist. */
   unscoped?: boolean;
   meta?: Record<string, unknown>;
@@ -111,6 +115,8 @@ export class Harness {
       surfaces: request.surfaces,
       ...(request.lens ? { lens: request.lens } : {}),
       ...(request.unscoped ? { unscoped: true } : {}),
+      ...(request.regimes ? { regimes: request.regimes } : {}),
+      ...(request.expert ? { expert: request.expert } : {}),
     });
     // A runner without workspace access cannot honour read/write; it works from inlined context only.
     const access = runner.workspace ? request.access : 'none';

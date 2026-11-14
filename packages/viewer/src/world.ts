@@ -90,6 +90,8 @@ export const TIER_LABEL: Record<string, string> = {
 export const ROLE_LABEL: Record<string, string> = {
   analyst: 'Analyst',
   product: 'Product',
+  compliance: 'Compliance',
+  expert: 'Expert',
   ux: 'UX designer',
   architect: 'Architect',
   security: 'Security',
@@ -103,6 +105,8 @@ export const ROLE_LABEL: Record<string, string> = {
 export const lensName = (lens: string) => (lens === 'ux' ? 'UX' : `${lens[0]?.toUpperCase()}${lens.slice(1)}`);
 
 export function agentName(agent: Pick<AgentState, 'role' | 'lens' | 'tag'>): string {
+  // An expert is known by its domain, not by the generic role.
+  if (agent.role === 'expert' && agent.tag) return `${agent.tag.replace(/-/g, ' ')} expert`.replace(/^./, (c) => c.toUpperCase());
   const base = agent.lens ? `${lensName(agent.lens)} reviewer` : (ROLE_LABEL[agent.role] ?? agent.role);
   return agent.tag ? `${base} (${agent.tag})` : base;
 }
@@ -260,6 +264,13 @@ export function applyEvent(world: World, ev: Ev): Effect[] {
       if (node) node.note = ok ? `Passed (${d.passed} checks)` : `${d.failed} failed, ${d.defects} defects`;
       effects.push({ kind: 'pulse', node: ev.node ?? '', tone: ok ? 'good' : 'warn' });
       say(ok ? 'good' : 'warn', 'QA', `Round ${d.round}: ${ok ? 'passed' : 'failed'}. ${d.passed} passed, ${d.failed} failed, ${d.notRun} not run, ${d.defects} defects`);
+      break;
+    }
+    case 'sbom.result': {
+      const clean = d.generated && !d.denied && !(d.checksFailed ?? []).length;
+      if (node) node.note = d.generated ? `${d.components} components` : 'Not generated';
+      effects.push({ kind: 'pulse', node: ev.node ?? '', tone: clean ? 'good' : d.generated ? 'warn' : 'bad' });
+      say(clean ? 'good' : d.generated ? 'warn' : 'bad', 'SBOM', d.generated ? `${d.format}, ${d.components} components. ${d.denied} forbidden licence(s), ${d.needsReview + d.unlicensed} to review, ${(d.checksFailed ?? []).length} EU baseline check(s) failed` : `Not generated: ${short(d.error, 160)}`);
       break;
     }
     case 'policy.denied':

@@ -22,6 +22,8 @@ export const ROLE_COLOR: Record<string, number> = {
   product: 0xe8742c,
   ux: 0xd9488f,
   architect: 0x2f7fc1,
+  compliance: 0x5b7a2a,
+  expert: 0x3a9fbf,
   security: 0x12908e,
   planner: 0x4a5fd0,
   developer: 0xc8436a,

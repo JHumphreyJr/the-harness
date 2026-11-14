@@ -33,6 +33,14 @@ verify:
   #   package.json -> npm run lint / typecheck / test / build, whichever exist
   commands: []
 
+# compliance:
+#   sbom:
+#     creator: "Your Team <security@example.com>"   # the EU baseline wants an email or URL
+#     # command: [cdxgen, --spec-version, "1.6", -o, "{output}", .]   # default: OWASP cdxgen
+#   licenses:
+#     deny: ["GPL-*", "AGPL-*", "SSPL-*"]           # not allowed in shipped components
+#     review: ["LGPL-*", "MPL-*"]                    # a person must look
+
 # Parallel build: how many developer agents at once, and which runner each task gets.
 # dispatch:
 #   maxParallel: 3

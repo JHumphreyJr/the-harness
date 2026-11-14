@@ -29,6 +29,7 @@ export type EventType =
   | 'verify.result'
   | 'review.verdict'
   | 'qa.verdict'
+  | 'sbom.result'
   | 'dispatch.planned'
   | 'policy.denied'
   | 'git.commit'
