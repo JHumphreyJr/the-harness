@@ -1,0 +1,39 @@
+# Runs on plan logins instead of API keys:
+#   Claude  : sign in with Claude Code (`claude auth login`); leave ANTHROPIC_API_KEY unset
+#   ChatGPT : `codex login`
+# Copy to the target project as foundry.config.yaml.
+
+runners:
+  claude:
+    type: claude-agent-sdk
+  codex-review:
+    type: cli
+    command: ["codex", "exec", "-"]     # read-only sandbox by default; prompt on stdin
+    promptVia: stdin
+    model: codex-chatgpt-plan
+  codex-dev:
+    type: cli
+    # Experimental: check `codex exec --help` for the current sandbox flags.
+    command: ["codex", "exec", "--sandbox", "workspace-write", "-c", "sandbox_workspace_write.network_access=true", "-"]
+    promptVia: stdin
+    model: codex-chatgpt-plan
+
+roles:
+  default: claude
+
+dispatch:
+  maxParallel: 3
+  byTrack:
+    # Codex builds the website while Claude builds the server and the iOS app.
+    # If a Codex task fails it is redone by the developer default.
+    web: codex-dev
+
+review:
+  # Every lens is reviewed by both vendors at the same time; either can block the pull request.
+  ensemble: [claude, codex-review]
+
+github:
+  openPullRequest: false                # local shakedown: review the branch diff, no push
+
+# Recorded against gate decisions in the audit log. Set this to whoever actually decides.
+approver: "Claude, delegated by Joe"

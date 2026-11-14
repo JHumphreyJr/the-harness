@@ -1,0 +1,40 @@
+# Independent AI peer review in CI, in addition to the reviews Foundry runs before opening the PR.
+# Uses Anthropic's official action. Check its action.yml for the current list of inputs:
+# https://github.com/anthropics/claude-code-action
+name: AI peer review
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  id-token: write
+
+jobs:
+  review:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            Review this pull request as an independent peer reviewer.
+
+            Review against, in order:
+            1. docs/product/PRD.md: does the change do what the requirements ask, no less and no more?
+            2. docs/architecture/ARCHITECTURE.md and docs/decisions/: does it follow the agreed design and scale tier?
+            3. docs/security/THREAT-MODEL.md, if present: is every listed control implemented?
+            4. docs/ux/UX-SPEC.md, if present: are all states and accessibility commitments implemented?
+
+            Report findings as inline comments with a severity (blocker, major, minor, nit),
+            why it matters, and a concrete fix. Request changes only for blocker or major
+            findings. If the work is sound, say so briefly. Do not push commits.
+          claude_args: "--max-turns 30"

@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Foundry floor</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M8 1l6 3.5v7L8 15l-6-3.5v-7z' fill='%23c8436a'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <main id="app">
+      <div id="stage" aria-label="3D view of the workflow. The Stages tab lists the same information as text."></div>
+
+      <header class="slip run" id="run">
+        <p class="brand">Foundry floor</p>
+        <h1 id="run-title">No run attached</h1>
+        <p class="meta" id="run-meta"></p>
+      </header>
+
+      <div class="slip link" role="group" aria-label="Connection">
+        <span class="lamp" id="lamp" data-state="off"></span>
+        <span id="link-text">Detached</span>
+        <label class="sr-only" for="run-pick">Run</label>
+        <select id="run-pick" disabled><option>No runs yet</option></select>
+        <button id="attach" type="button">Attach</button>
+        <button id="open" type="button" class="quiet">Open log file</button>
+        <input id="file" type="file" accept=".jsonl,.json,.txt" hidden />
+      </div>
+
+      <div class="slip waiting" id="waiting" role="status" hidden>
+        <strong id="waiting-title"></strong>
+        <span>Answer in the terminal where the run was started.</span>
+      </div>
+
+      <section class="empty" id="empty">
+        <h2>Nothing on the floor yet</h2>
+        <p>Start a run in any project and this board fills in as agents work.</p>
+        <code>foundry run "what you want built" --viewer</code>
+        <p>Or see the whole workflow offline with <code>foundry demo</code>, or open an exported <code>.events.jsonl</code> log.</p>
+      </section>
+
+      <aside class="slip panel" id="panel" aria-label="Run details">
+        <div class="tabs" role="tablist">
+          <button role="tab" aria-selected="true" data-tab="activity" id="tab-activity">Activity</button>
+          <button role="tab" aria-selected="false" data-tab="stages" id="tab-stages">Stages</button>
+          <button role="tab" aria-selected="false" data-tab="decisions" id="tab-decisions">Decisions</button>
+        </div>
+        <div class="detail" id="detail" hidden></div>
+        <ol class="feed" id="view-activity" role="tabpanel" aria-labelledby="tab-activity"></ol>
+        <ul class="stages" id="view-stages" role="tabpanel" aria-labelledby="tab-stages" hidden></ul>
+        <ul class="decisions" id="view-decisions" role="tabpanel" aria-labelledby="tab-decisions" hidden></ul>
+      </aside>
+
+      <footer class="slip transport" aria-label="Playback">
+        <button id="play" type="button" aria-label="Play">Play</button>
+        <label class="sr-only" for="speed">Playback speed</label>
+        <select id="speed">
+          <option value="1">1×</option>
+          <option value="4" selected>4×</option>
+          <option value="16">16×</option>
+        </select>
+        <label class="sr-only" for="scrub">Position in the run</label>
+        <input id="scrub" type="range" min="0" max="0" value="0" />
+        <output id="position" for="scrub">0 of 0</output>
+        <button id="live" type="button" aria-pressed="true">Live</button>
+      </footer>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

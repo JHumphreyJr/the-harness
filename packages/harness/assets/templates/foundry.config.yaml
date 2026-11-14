@@ -1,0 +1,51 @@
+# Foundry configuration. Every key is optional; these are the defaults plus commented examples.
+
+# Runners are the engines agents run on. Define as many as you like and map roles to them.
+runners:
+  claude:
+    type: claude-agent-sdk      # full coding agent: files, shell, per-tool audit events, policy hooks
+    # model: claude-sonnet-5-5  # omit to use the SDK default
+
+  # A second vendor for independent review. Any model LangChain's initChatModel accepts.
+  # Requires the provider package, for example: npm i @langchain/openai
+  # second-opinion:
+  #   type: chat
+  #   model: "openai:<model-name>"
+
+  # Any coding-agent CLI. {prompt} is replaced with the full prompt as a single argument.
+  # Check your CLI's own documentation for its non-interactive flags.
+  # other-cli:
+  #   type: cli
+  #   command: ["<agent-cli>", "<non-interactive-flags>", "{prompt}"]
+  #   model: "<label recorded in the audit log>"
+
+# Which runner each role uses. Unlisted roles use `default`.
+# Roles: analyst, product, ux, architect, security, planner, developer, reviewer, writer
+roles:
+  default: claude
+  # reviewer: second-opinion   # a different model than the developer catches more
+
+verify:
+  # Commands that must all exit 0. Empty means auto-detect:
+  #   scripts/verify.sh -> that script alone (use it for multi-toolchain projects)
+  #   Package.swift -> swift build, swift test
+  #   Cargo.toml   -> cargo fmt --check, cargo clippy -D warnings, cargo test
+  #   package.json -> npm run lint / typecheck / test / build, whichever exist
+  commands: []
+
+# Parallel build: how many developer agents at once, and which runner each task gets.
+# dispatch:
+#   maxParallel: 3
+#   bySize: { small: claude, large: claude }   # high-risk tasks count as large
+#   byTrack: { ios: claude, web: other-cli }   # wins over bySize
+
+# review:
+#   ensemble: [claude, second-opinion]   # every lens reviewed by each runner in parallel
+
+github:
+  openPullRequest: true   # needs an `origin` remote and an authenticated `gh`
+  draft: true
+  postReviews: true       # post each AI review round as a PR comment
+
+# Name recorded against human gate decisions in the audit log.
+# approver: your-name

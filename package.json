@@ -1,0 +1,15 @@
+{
+  "name": "foundry",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Graph-orchestrated, tier-aware multi-agent software harness with a tamper-evident audit trail and a 3D live viewer",
+  "workspaces": ["packages/*"],
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "build": "npm run build -w @foundry/viewer && npm run build -w @foundry/harness",
+    "test": "npm test -w @foundry/harness",
+    "typecheck": "npm run typecheck --workspaces",
+    "foundry": "node packages/harness/dist/cli.js",
+    "demo": "node packages/harness/dist/cli.js demo"
+  }
+}
